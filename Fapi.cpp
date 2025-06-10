@@ -55,10 +55,58 @@ Fapi::~Fapi()
 
 Fapi::AFILE Fapi::openFile(const char *path, BYTE mode, uint32_t timeout_ms, bool updateWavHeaderFlag)
 {
-    logI("openFile path=%s mode=%u timeout=%u wav=%d", path, mode, timeout_ms, updateWavHeaderFlag);
+    return openFileCommon(path, mode, timeout_ms, updateWavHeaderFlag, false);
+}
+
+Fapi::AFILE Fapi::openIndexFile(const char *path, BYTE mode, uint32_t timeout_ms, bool updateWavHeaderFlag)
+{
+    // Внутреннее использование библиотекой индексов – пропускаем проверку
+    return openFileCommon(path, mode, timeout_ms, updateWavHeaderFlag, true);
+}
+
+Fapi::AFILE Fapi::openFileCommon(const char *path, BYTE mode, uint32_t timeout_ms, bool updateWavHeaderFlag, bool skipIndexCheck)
+{
+    logI("openFileCommon path=%s mode=%u timeout=%u wav=%d skipIndexCheck=%d", path, mode, timeout_ms, updateWavHeaderFlag, skipIndexCheck);
 
     // Определяем, запрашивается ли запись.
     bool reqWrite = (mode & FA_WRITE) ? true : false;
+
+    // Проверяем необходимость создания индексного файла
+    if (!skipIndexCheck && !(mode & FA_WRITE))
+    {
+        std::string p(path);
+        size_t pos = p.find_last_of("/\\");
+        std::string filename = (pos == std::string::npos) ? p : p.substr(pos + 1);
+        if (filename == "index")
+        {
+            FILINFO finfo;
+            bool needCreate = false;
+            {
+                SEM_LOCK_OR_RETURN(Sem::ResourceKey::FATFS_MUT, -1);
+                if (f_stat(path, &finfo) != FR_OK || finfo.fsize == 0)
+                    needCreate = true;
+            }
+            if (needCreate)
+            {
+                std::string dir = (pos == std::string::npos) ? std::string("") : p.substr(0, pos);
+                generateIndex(dir.c_str());
+                TickType_t start = getTickCount();
+                const TickType_t waitTicks = pdMS_TO_TICKS(5000);
+                while (getTickCount() - start < waitTicks)
+                {
+                    bool ready = false;
+                    {
+                        SEM_LOCK_OR_RETURN(Sem::ResourceKey::FATFS_MUT, -1);
+                        if (f_stat(path, &finfo) == FR_OK && finfo.fsize > 0)
+                            ready = true;
+                    }
+                    if (ready)
+                        break;
+                    vTaskDelay(pdMS_TO_TICKS(100));
+                }
+            }
+        }
+    }
 
     {
         SEM_LOCK_OR_RETURN(Sem::ResourceKey::FATFS_MUT, -1);
@@ -111,23 +159,23 @@ Fapi::AFILE Fapi::openFile(const char *path, BYTE mode, uint32_t timeout_ms, boo
             logW("createPath failed for %s with code %d", path, ret);
         }
     }
-    
+
     AFILE handle = 0;
     {
-		FRESULT res = FR_OK;
-		FIL file;
+        FRESULT res = FR_OK;
+        FIL file;
         {
-			SEM_LOCK_OR_RETURN(Sem::ResourceKey::FATFS_MUT, -1);
-        	res = f_open(&file, path, mode);
-		}
+            SEM_LOCK_OR_RETURN(Sem::ResourceKey::FATFS_MUT, -1);
+            res = f_open(&file, path, mode);
+        }
         // Если получена ошибка FR_LOCKED, ждём 500 мс и пробуем ещё раз
         if (res == FR_LOCKED)
         {
             vTaskDelay(pdMS_TO_TICKS(500));
-			{
-			SEM_LOCK_OR_RETURN(Sem::ResourceKey::FATFS_MUT, -1);
-            res = f_open(&file, path, mode);
-			}
+            {
+                SEM_LOCK_OR_RETURN(Sem::ResourceKey::FATFS_MUT, -1);
+                res = f_open(&file, path, mode);
+            }
         }
         if (res != FR_OK)
         {

@@ -71,6 +71,10 @@ public:
     // Возвращает дескриптор (> 0) или отрицательное значение в случае ошибки.
     AFILE openFile(const char* path, BYTE mode, uint32_t timeout_ms = 0, bool updateWavHeader = false);
 
+    // Специальная версия для самой библиотеки индексов. Не инициирует
+    // автоматическое создание индексного файла при его отсутствии.
+    AFILE openIndexFile(const char* path, BYTE mode, uint32_t timeout_ms = 0, bool updateWavHeader = false);
+
     // Открытие каталога.
     // Если каталог уже открыт, возвращается существующий дескриптор.
     // Возвращается универсальный дескриптор.
@@ -154,6 +158,10 @@ private:
 
     // Удаление дескриптора из хранилища
     void removeDescriptor(AFILE handle);
+
+    // Общая реализация открытия файла с опциональным пропуском проверки
+    // существования индексного файла.
+    AFILE openFileCommon(const char* path, BYTE mode, uint32_t timeout_ms, bool updateWavHeaderFlag, bool skipIndexCheck);
 
 	
 
